@@ -1,12 +1,27 @@
 import streamlit as st
 from dotenv import load_dotenv
 load_dotenv()  # load all environment variables
-import google.genai as genai  # NEW: Changed from google.generativeai
 import os
 import re
 
 # Import correctly
 from youtube_transcript_api import YouTubeTranscriptApi
+
+# TRY BOTH Gemini API packages for compatibility
+try:
+    # Try NEW package first
+    import google.genai as genai
+    GEMINI_NEW = True
+    st.sidebar.info("Using google-genai (new package)")
+except ImportError:
+    try:
+        # Fall back to OLD package
+        import google.generativeai as genai
+        GEMINI_NEW = False
+        st.sidebar.warning("Using deprecated google-generativeai package")
+    except ImportError:
+        st.error("Neither google-genai nor google-generativeai is installed!")
+        st.stop()
 
 st.set_page_config(page_title="YouTube Summarizer", page_icon="🎬")
 st.title("🎬 YouTube Transcript to Detailed Notes Converter")
@@ -34,14 +49,19 @@ st.markdown("""
 
 st.markdown("### Paste a YouTube link below to get AI-generated notes:")
 
-# Initialize Gemini API with NEW package
+# Initialize Gemini API
 api_key = os.getenv("GOOGLE_API_KEY")
 if api_key:
     try:
-        # NEW: Configure with the new package
-        client = genai.Client(api_key=api_key)
+        if GEMINI_NEW:
+            # NEW package syntax
+            client = genai.Client(api_key=api_key)
+            st.session_state.gemini_client = client
+        else:
+            # OLD package syntax
+            genai.configure(api_key=api_key)
+        
         st.session_state.gemini_available = True
-        st.session_state.gemini_client = client
     except Exception as e:
         st.error(f"❌ Gemini API configuration failed: {e}")
         st.session_state.gemini_available = False
@@ -101,35 +121,55 @@ def extract_transcript_details(youtube_video_url):
         st.error(f"❌ Error extracting transcript: {str(e)}")
         return None
 
-## NEW Gemini AI summary function with updated package
+## Gemini AI summary function - compatible with both packages
 def generate_gemini_content(transcript_text, prompt):
     try:
-        # Get client from session state
-        client = st.session_state.get('gemini_client')
-        if not client:
+        if not st.session_state.get('gemini_available', False):
             return None
         
-        # Try different model names (new models from your test)
-        model_names = [
-            "gemini-2.5-flash",  # Fast and capable
-            "gemini-2.5-flash-exp",  # Experimental version
-            "gemini-2.0-flash",  # Previous version
-            "gemini-1.5-pro",  # Pro version
-            "gemini-pro",  # Legacy name
-        ]
+        if GEMINI_NEW:
+            # NEW package syntax
+            client = st.session_state.get('gemini_client')
+            if not client:
+                return None
+            
+            # Try different model names
+            model_names = [
+                "gemini-2.5-flash",  # Fast and capable
+                "gemini-2.0-flash",  # Previous version
+                "gemini-1.5-pro",  # Pro version
+                "gemini-pro",  # Legacy name
+            ]
+            
+            for model_name in model_names:
+                try:
+                    with st.spinner(f"Using {model_name}..."):
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=f"{prompt}\n\nTranscript:\n{transcript_text[:8000]}"
+                        )
+                        return response.text
+                except:
+                    continue
         
-        for model_name in model_names:
-            try:
-                with st.spinner(f"Using {model_name}..."):
-                    # NEW: Generate content with the new package
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=f"{prompt}\n\nTranscript:\n{transcript_text[:8000]}"  # Limit length
-                    )
-                    return response.text
-            except Exception as e:
-                st.write(f"Model {model_name} failed: {str(e)[:100]}")
-                continue
+        else:
+            # OLD package syntax
+            # Try different model names
+            model_names = [
+                "gemini-1.5-pro",
+                "gemini-1.0-pro",
+                "gemini-pro",
+                "models/gemini-pro",
+            ]
+            
+            for model_name in model_names:
+                try:
+                    with st.spinner(f"Using {model_name}..."):
+                        model = genai.GenerativeModel(model_name)
+                        response = model.generate_content(prompt + transcript_text[:8000])
+                        return response.text
+                except:
+                    continue
         
         return None  # All models failed
         
@@ -155,7 +195,6 @@ def generate_simple_summary(transcript_text):
     {summary}
     
     *Note: This is a simple text extraction since AI summarization is unavailable.*
-    *To enable AI summarization, please check your Gemini API configuration.*
     
     **Transcript Length:** {len(words)} words, {len(transcript_text)} characters
     """
@@ -175,7 +214,6 @@ with st.expander("💡 Need a video to test?"):
     Try these videos (they have captions):
     - `https://www.youtube.com/watch?v=cE72C0e0bKw` (Short tutorial)
     - `https://www.youtube.com/watch?v=9bZkp7q19f0` (Gangnam Style - has captions)
-    - `https://www.youtube.com/watch?v=dQw4w9WgXcQ` (Classic)
     """)
 
 # Show thumbnail if URL is entered
